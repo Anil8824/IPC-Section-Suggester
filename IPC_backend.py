@@ -3,117 +3,133 @@ import pandas as pd
 import pickle
 from sentence_transformers import SentenceTransformer, util
 
-# -----------------------------
-# SIMPLE TOKENIZER (NO NLTK)
-# -----------------------------
+# -------------------------------------------
+# Custom Preprocessing (NO NLTK NEEDED)
+# -------------------------------------------
 def preprocess_text(text):
     text = text.lower()
-    text = re.sub(r"[^a-zA-Z0-9\s]", " ", text)
+    text = re.sub(r"[^a-zA-Z0-9\s]", " ", text)  # remove special characters
     words = text.split()
-    common_stopwords = {"the","is","and","to","of","in","for","on","a","an"}
-    words = [w for w in words if w not in common_stopwords]
+
+    stop_words = {"the","is","are","was","were","am","to","of","in","and","on","at","a","an","for"}
+    words = [w for w in words if w not in stop_words]
+
     return " ".join(words)
 
-# -----------------------------
-# LOAD DATA + MODEL
-# -----------------------------
+
+# -------------------------------------------
+# Load Dataset + Model
+# -------------------------------------------
 with open("preprocess_data.pkl", "rb") as f:
     new_ds = pickle.load(f)
 
 model = SentenceTransformer("paraphrase-MiniLM-L6-v2")
 
-# -----------------------------
-# RULE-ENGINE (HIGH PRIORITY)
-# -----------------------------
-RULES = {
-    # FRAUD / SCAM / BANK OTP
-    r"(otp|bank|fraud|scam|cheat|transaction|online|loan|impersonat)": [
-        ("Cheating", "IPC 420"),
-        ("Cheating by Personation", "IPC 419"),
-    ],
 
-    # THEFT / MOBILE STOLEN
-    r"(stole|theft|mobile|cash|wallet|pickpocket|rob|snatch)": [
-        ("Theft", "IPC 379"),
-        ("House Theft", "IPC 380"),
-    ],
+# -------------------------------------------
+# RULE ENGINE (Very Powerful & Smart)
+# -------------------------------------------
+def rule_engine(complaint):
+    text = complaint.lower()
+    rules = []
 
-    # HOUSE BREAKING
-    r"(break|broken|house|night|entered|trespass)": [
-        ("House Breaking by Night", "IPC 457"),
-        ("Lurking House Trespass", "IPC 460"),
-    ],
+    # 1) Theft (379)
+    if any(word in text for word in ["steal", "stole", "theft", "robbed", "lost", "took"]):
+        rules.append({
+            "Description": "Theft",
+            "Offense": "IPC 379",
+            "Punishment": "As per IPC section",
+            "Cognizable": "Cognizable",
+            "Bailable": "Bailable",
+            "Court": "Any Magistrate"
+        })
 
-    # MURDER / ATTEMPT TO MURDER
-    r"(killed|murder|stab|knife|gun|shot|blood|attack)": [
-        ("Murder", "IPC 302"),
-        ("Attempt to Murder", "IPC 307"),
-    ],
+    # 2) House Theft (380)
+    if any(word in text for word in ["house", "home", "room", "inside my house"]):
+        if any(word in text for word in ["stole", "theft", "steal", "robbed"]):
+            rules.append({
+                "Description": "House Theft",
+                "Offense": "IPC 380",
+                "Punishment": "As per IPC section",
+                "Cognizable": "Cognizable",
+                "Bailable": "Non-Bailable",
+                "Court": "Magistrate"
+            })
 
-    # SEXUAL ASSAULT / HARASSMENT
-    r"(rape|sexual|harass|touch|molest|forced|assault)": [
-        ("Rape", "IPC 376"),
-        ("Sexual Harassment", "IPC 354A"),
-        ("Outraging modesty", "IPC 354"),
-    ],
+    # 3) House Breaking (454)
+    if any(word in text for word in ["broke the lock", "break the lock", "forced entry", "break in", "door broken"]):
+        rules.append({
+            "Description": "House Breaking",
+            "Offense": "IPC 454",
+            "Punishment": "Up to 3 years + Fine",
+            "Cognizable": "Cognizable",
+            "Bailable": "Non-Bailable",
+            "Court": "Any Magistrate"
+        })
 
-    # CYBER CRIME
-    r"(hack|hacked|password|facebook|instagram|email)": [
-        ("Identity Theft", "IT Act 66C"),
-        ("Online Impersonation", "IT Act 66D"),
-    ]
-}
+    # 4) House Trespass by Night (457)
+    if "night" in text or "midnight" in text or "late night" in text:
+        if any(word in text for word in ["break", "trespass", "entered", "broke", "forced entry"]):
+            rules.append({
+                "Description": "Lurking House Trespass by Night",
+                "Offense": "IPC 457",
+                "Punishment": "Up to 5 years + Fine",
+                "Cognizable": "Cognizable",
+                "Bailable": "Non-Bailable",
+                "Court": "Magistrate"
+            })
 
-# -----------------------------
-# APPLY RULE ENGINE
-# -----------------------------
-def rule_based_suggestions(text):
-    matched_rules = []
-    for pattern, sections in RULES.items():
-        if re.search(pattern, text.lower()):
-            matched_rules.extend(sections)
-    return matched_rules[:3]  # Only top 3
+    return rules
 
-# -----------------------------
-# AI-BASED SIMILARITY SEARCH
-# -----------------------------
-def ai_based_suggestions(complaint, dataset, count=3):
-    preprocessed = preprocess_text(complaint)
-    comp_emb = model.encode(preprocessed)
-    sec_emb = model.encode(dataset["Combo"].tolist())
 
-    sims = util.pytorch_cos_sim(comp_emb, sec_emb)[0]
-    top_indices = sims.topk(count).indices.tolist()
+# -------------------------------------------
+# AI MODEL (Semantic Search)
+# -------------------------------------------
+def ai_model_suggestions(complaint, dataset, min_suggestions=3):
 
-    return dataset.iloc[top_indices][[
+    processed = preprocess_text(complaint)
+
+    try:
+        complaint_emb = model.encode(processed)
+        section_emb = model.encode(dataset["Combo"].tolist())
+    except:
+        return []
+
+    sims = util.pytorch_cos_sim(complaint_emb, section_emb)[0]
+
+    # Top matches
+    top_idx = sims.topk(min_suggestions).indices.tolist()
+
+    suggestions = dataset.iloc[top_idx][[
         "Description", "Offense", "Punishment", "Cognizable", "Bailable", "Court"
     ]].to_dict(orient="records")
 
-# -----------------------------
-# FINAL COMBINED SUGGESTION
-# -----------------------------
+    return suggestions
+
+
+# -------------------------------------------
+# FINAL FUNCTION (Hybrid Output)
+# -------------------------------------------
 def suggest_sections(complaint, dataset):
 
-    # 1️⃣ RULE ENGINE - HIGH PRIORITY
-    rules = rule_based_suggestions(complaint)
+    final_output = []
 
-    # If rule-engine gives strong matches → return them + AI combined
-    if rules:
-        ai_suggestions = ai_based_suggestions(complaint, dataset, count=3)
+    # 1️⃣ Rule Engine First
+    rule_hits = rule_engine(complaint)
+    final_output.extend(rule_hits)
 
-        # Convert rules to structured format
-        rule_output = []
-        for title, section in rules:
-            rule_output.append({
-                "Description": title,
-                "Offense": section,
-                "Punishment": "As per IPC section",
-                "Cognizable": "Depends on case",
-                "Bailable": "Depends on section",
-                "Court": "As per section"
-            })
+    # 2️⃣ Then AI Suggestions
+    ai_hits = ai_model_suggestions(complaint, dataset)
+    final_output.extend(ai_hits)
 
-        return rule_output[:2] + ai_suggestions[:1]
+    # Remove duplicates (optional)
+    unique = []
+    seen = set()
 
-    # 2️⃣ IF RULES DID NOT MATCH → AI ONLY
-    return ai_based_suggestions(complaint, dataset, count=3)
+    for item in final_output:
+        key = item["Offense"]
+        if key not in seen:
+            unique.append(item)
+            seen.add(key)
+
+    return unique[:5]  # return best 5 results
