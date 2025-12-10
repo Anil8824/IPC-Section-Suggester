@@ -3,62 +3,117 @@ import pandas as pd
 import pickle
 from sentence_transformers import SentenceTransformer, util
 
-# -----------------------------------------
-# SIMPLE CUSTOM PREPROCESSOR (NO NLTK)
-# -----------------------------------------
+# -----------------------------
+# SIMPLE TOKENIZER (NO NLTK)
+# -----------------------------
 def preprocess_text(text):
     text = text.lower()
-
-    # Remove unwanted characters
     text = re.sub(r"[^a-zA-Z0-9\s]", " ", text)
-
-    # Remove extra spaces
-    text = re.sub(r"\s+", " ", text).strip()
-
-    # Manually defined stopwords (very small list)
-    stop_words = {
-        "the", "is", "am", "are", "was", "were", "a", "an", "and", "or", "in",
-        "on", "at", "to", "from", "of", "for", "by", "with", "about", "into",
-        "that", "this", "it", "as", "be", "been", "have", "has", "had", "my"
-    }
-
-    words = [w for w in text.split() if w not in stop_words]
-
+    words = text.split()
+    common_stopwords = {"the","is","and","to","of","in","for","on","a","an"}
+    words = [w for w in words if w not in common_stopwords]
     return " ".join(words)
 
-
-# -----------------------------------------
+# -----------------------------
 # LOAD DATA + MODEL
-# -----------------------------------------
+# -----------------------------
 with open("preprocess_data.pkl", "rb") as f:
     new_ds = pickle.load(f)
 
 model = SentenceTransformer("paraphrase-MiniLM-L6-v2")
 
+# -----------------------------
+# RULE-ENGINE (HIGH PRIORITY)
+# -----------------------------
+RULES = {
+    # FRAUD / SCAM / BANK OTP
+    r"(otp|bank|fraud|scam|cheat|transaction|online|loan|impersonat)": [
+        ("Cheating", "IPC 420"),
+        ("Cheating by Personation", "IPC 419"),
+    ],
 
-# -----------------------------------------
-# SUGGEST IPC SECTIONS
-# -----------------------------------------
-def suggest_sections(complaint, dataset, min_suggestions=3):
+    # THEFT / MOBILE STOLEN
+    r"(stole|theft|mobile|cash|wallet|pickpocket|rob|snatch)": [
+        ("Theft", "IPC 379"),
+        ("House Theft", "IPC 380"),
+    ],
 
-    processed = preprocess_text(complaint)
+    # HOUSE BREAKING
+    r"(break|broken|house|night|entered|trespass)": [
+        ("House Breaking by Night", "IPC 457"),
+        ("Lurking House Trespass", "IPC 460"),
+    ],
 
-    complaint_embedding = model.encode(processed)
-    section_embedding = model.encode(dataset["Combo"].tolist())
+    # MURDER / ATTEMPT TO MURDER
+    r"(killed|murder|stab|knife|gun|shot|blood|attack)": [
+        ("Murder", "IPC 302"),
+        ("Attempt to Murder", "IPC 307"),
+    ],
 
-    similarities = util.pytorch_cos_sim(complaint_embedding, section_embedding)[0]
+    # SEXUAL ASSAULT / HARASSMENT
+    r"(rape|sexual|harass|touch|molest|forced|assault)": [
+        ("Rape", "IPC 376"),
+        ("Sexual Harassment", "IPC 354A"),
+        ("Outraging modesty", "IPC 354"),
+    ],
 
-    similarity_threshold = 0.2
-    relevant_indices = []
+    # CYBER CRIME
+    r"(hack|hacked|password|facebook|instagram|email)": [
+        ("Identity Theft", "IT Act 66C"),
+        ("Online Impersonation", "IT Act 66D"),
+    ]
+}
 
-    while len(relevant_indices) < min_suggestions and similarity_threshold >= 0:
-        relevant_indices = [i for i, sim in enumerate(similarities) if sim > similarity_threshold]
-        similarity_threshold -= 0.05
+# -----------------------------
+# APPLY RULE ENGINE
+# -----------------------------
+def rule_based_suggestions(text):
+    matched_rules = []
+    for pattern, sections in RULES.items():
+        if re.search(pattern, text.lower()):
+            matched_rules.extend(sections)
+    return matched_rules[:3]  # Only top 3
 
-    sorted_indices = sorted(relevant_indices, key=lambda i: similarities[i], reverse=True)
+# -----------------------------
+# AI-BASED SIMILARITY SEARCH
+# -----------------------------
+def ai_based_suggestions(complaint, dataset, count=3):
+    preprocessed = preprocess_text(complaint)
+    comp_emb = model.encode(preprocessed)
+    sec_emb = model.encode(dataset["Combo"].tolist())
 
-    suggestions = dataset.iloc[sorted_indices][:min_suggestions][[
+    sims = util.pytorch_cos_sim(comp_emb, sec_emb)[0]
+    top_indices = sims.topk(count).indices.tolist()
+
+    return dataset.iloc[top_indices][[
         "Description", "Offense", "Punishment", "Cognizable", "Bailable", "Court"
     ]].to_dict(orient="records")
 
-    return suggestions
+# -----------------------------
+# FINAL COMBINED SUGGESTION
+# -----------------------------
+def suggest_sections(complaint, dataset):
+
+    # 1️⃣ RULE ENGINE - HIGH PRIORITY
+    rules = rule_based_suggestions(complaint)
+
+    # If rule-engine gives strong matches → return them + AI combined
+    if rules:
+        ai_suggestions = ai_based_suggestions(complaint, dataset, count=3)
+
+        # Convert rules to structured format
+        rule_output = []
+        for title, section in rules:
+            rule_output.append({
+                "Description": title,
+                "Offense": section,
+                "Punishment": "As per IPC section",
+                "Cognizable": "Depends on case",
+                "Bailable": "Depends on section",
+                "Court": "As per section"
+            })
+
+        return rule_output[:2] + ai_suggestions[:1]
+
+    # 2️⃣ IF RULES DID NOT MATCH → AI ONLY
+    return ai_based_suggestions(complaint, dataset, count=3)
