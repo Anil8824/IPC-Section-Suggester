@@ -41,7 +41,7 @@ def preprocess_text(text):
 with open("preprocess_data.pkl", "rb") as f:
     new_ds = pickle.load(f)
 
-model = SentenceTransformer("paraphrase-MiniLM-L6-v2")
+model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
 
 # -----------------------------
 # Suggest IPC Sections

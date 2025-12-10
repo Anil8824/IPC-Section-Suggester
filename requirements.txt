@@ -2,8 +2,6 @@ streamlit
 pandas
 numpy
 nltk
-sentence-transformers
-torch==2.0.1
-transformers
+sentence-transformers>=2.7.0
 scikit-learn
-pickle5
+scipy
