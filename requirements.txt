@@ -1,0 +1,7 @@
+streamlit
+pandas
+numpy
+nltk
+sentence-transformers
+torch
+pickle5
