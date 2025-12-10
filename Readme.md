@@ -24,7 +24,8 @@
 
 **👉 https://ipc-section-suggester-6776.streamlit.app/**
 
-📁 Project Structure
+## 📁 Project Structure
+
 IPC-Section-Suggestor/
 │
 ├── ipc_model.pkl                   # Trained NLP model (vectorizer + classifier)
