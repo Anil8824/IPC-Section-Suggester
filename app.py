@@ -1,20 +1,18 @@
 import streamlit as st
-import pandas as pd
-from IPC_backend import suggest_sections, new_ds
+from IPC_backend import suggest_sections
 
 st.title("🔍 IPC Section Suggestion System")
-
 st.write("Enter the crime description below and get the most relevant IPC sections.")
 
-# Input area for complaint description
+# Input box
 complaint = st.text_area("📝 Crime Description", height=200)
 
-# Button to get suggestions
+# Button
 if st.button("Get IPC Suggestions"):
     if complaint.strip():
         with st.spinner("Analyzing crime description..."):
-            suggestions = suggest_sections(complaint, new_ds)
-        
+            suggestions = suggest_sections(complaint)
+
         if suggestions:
             st.success("✅ Suggested IPC Sections:")
 

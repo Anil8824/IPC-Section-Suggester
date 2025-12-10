@@ -1,14 +1,30 @@
 import re
 import pandas as pd
-import pickle
 from sentence_transformers import SentenceTransformer, util
 
-# -------------------------------------------
-# Custom Preprocessing (NO NLTK NEEDED)
-# -------------------------------------------
+# ----------------------------------------------------
+# LOAD NEW DATASET (USE THIS)
+# ----------------------------------------------------
+dataset = pd.read_csv("IPC_1000_dataset.csv")
+
+# Create Combo column if not exists
+if "Combo" not in dataset.columns:
+    dataset["Combo"] = (
+        dataset["Description"].astype(str) + " " +
+        dataset["Offense"].astype(str) + " " +
+        dataset["Punishment"].astype(str)
+    )
+
+# Load AI model
+model = SentenceTransformer("paraphrase-MiniLM-L6-v2")
+
+
+# ----------------------------------------------------
+# Custom Light Preprocessing
+# ----------------------------------------------------
 def preprocess_text(text):
     text = text.lower()
-    text = re.sub(r"[^a-zA-Z0-9\s]", " ", text)  # remove special characters
+    text = re.sub(r"[^a-zA-Z0-9\s]", " ", text)
     words = text.split()
 
     stop_words = {"the","is","are","was","were","am","to","of","in","and","on","at","a","an","for"}
@@ -17,119 +33,103 @@ def preprocess_text(text):
     return " ".join(words)
 
 
-# -------------------------------------------
-# Load Dataset + Model
-# -------------------------------------------
-with open("preprocess_data.pkl", "rb") as f:
-    new_ds = pickle.load(f)
-
-model = SentenceTransformer("paraphrase-MiniLM-L6-v2")
-
-
-# -------------------------------------------
-# RULE ENGINE (Very Powerful & Smart)
-# -------------------------------------------
+# ----------------------------------------------------
+# RULE ENGINE (Exact crime → exact IPC)
+# ----------------------------------------------------
 def rule_engine(complaint):
-    text = complaint.lower()
+    t = complaint.lower()
     rules = []
 
-    # 1) Theft (379)
-    if any(word in text for word in ["steal", "stole", "theft", "robbed", "lost", "took"]):
+    # Theft (379)
+    if any(w in t for w in ["steal","stole","robbed","theft","snatched"]):
         rules.append({
             "Description": "Theft",
             "Offense": "IPC 379",
-            "Punishment": "As per IPC section",
+            "Punishment": "Up to 3 years or fine or both",
             "Cognizable": "Cognizable",
             "Bailable": "Bailable",
             "Court": "Any Magistrate"
         })
 
-    # 2) House Theft (380)
-    if any(word in text for word in ["house", "home", "room", "inside my house"]):
-        if any(word in text for word in ["stole", "theft", "steal", "robbed"]):
-            rules.append({
-                "Description": "House Theft",
-                "Offense": "IPC 380",
-                "Punishment": "As per IPC section",
-                "Cognizable": "Cognizable",
-                "Bailable": "Non-Bailable",
-                "Court": "Magistrate"
-            })
-
-    # 3) House Breaking (454)
-    if any(word in text for word in ["broke the lock", "break the lock", "forced entry", "break in", "door broken"]):
+    # House Theft (380)
+    if ("house" in t or "home" in t) and any(w in t for w in ["stole","theft","robbed"]):
         rules.append({
-            "Description": "House Breaking",
-            "Offense": "IPC 454",
-            "Punishment": "Up to 3 years + Fine",
+            "Description": "House Theft",
+            "Offense": "IPC 380",
+            "Punishment": "Up to 7 years + Fine",
             "Cognizable": "Cognizable",
             "Bailable": "Non-Bailable",
+            "Court": "Magistrate"
+        })
+
+    # Criminal Intimidation / Blackmail (503 / 384)
+    if any(w in t for w in ["threaten","threatening","blackmail","extort"]):
+        rules.append({
+            "Description": "Criminal Intimidation / Blackmail",
+            "Offense": "IPC 503 / IPC 384",
+            "Punishment": "Up to 3 years + Fine",
+            "Cognizable": "Non-Cognizable",
+            "Bailable": "Bailable",
             "Court": "Any Magistrate"
         })
 
-    # 4) House Trespass by Night (457)
-    if "night" in text or "midnight" in text or "late night" in text:
-        if any(word in text for word in ["break", "trespass", "entered", "broke", "forced entry"]):
-            rules.append({
-                "Description": "Lurking House Trespass by Night",
-                "Offense": "IPC 457",
-                "Punishment": "Up to 5 years + Fine",
-                "Cognizable": "Cognizable",
-                "Bailable": "Non-Bailable",
-                "Court": "Magistrate"
-            })
+    # Cyber Extortion (384 + IT Act Section 66D)
+    if any(w in t for w in ["instagram","online","otp","cyber","leak"]):
+        rules.append({
+            "Description": "Cyber Fraud / Extortion",
+            "Offense": "IPC 384 + IT Act 66D",
+            "Punishment": "Up to 3 years + Fine",
+            "Cognizable": "Cognizable",
+            "Bailable": "Bailable",
+            "Court": "Any Magistrate"
+        })
 
     return rules
 
 
-# -------------------------------------------
-# AI MODEL (Semantic Search)
-# -------------------------------------------
-def ai_model_suggestions(complaint, dataset, min_suggestions=3):
+# ----------------------------------------------------
+# AI Model (Semantic Matching)
+# ----------------------------------------------------
+def ai_model_suggestions(complaint, min_suggestions=3):
 
-    processed = preprocess_text(complaint)
+    text = preprocess_text(complaint)
 
     try:
-        complaint_emb = model.encode(processed)
-        section_emb = model.encode(dataset["Combo"].tolist())
+        query_emb = model.encode(text)
+        data_emb = model.encode(dataset["Combo"].tolist())
     except:
         return []
 
-    sims = util.pytorch_cos_sim(complaint_emb, section_emb)[0]
+    sims = util.pytorch_cos_sim(query_emb, data_emb)[0]
 
-    # Top matches
     top_idx = sims.topk(min_suggestions).indices.tolist()
 
-    suggestions = dataset.iloc[top_idx][[
+    return dataset.iloc[top_idx][[
         "Description", "Offense", "Punishment", "Cognizable", "Bailable", "Court"
     ]].to_dict(orient="records")
 
-    return suggestions
 
+# ----------------------------------------------------
+# FINAL HYBRID FUNCTION
+# ----------------------------------------------------
+def suggest_sections(complaint):
 
-# -------------------------------------------
-# FINAL FUNCTION (Hybrid Output)
-# -------------------------------------------
-def suggest_sections(complaint, dataset):
+    final = []
 
-    final_output = []
+    # 1) Rule Engine first
+    final.extend(rule_engine(complaint))
 
-    # 1️⃣ Rule Engine First
-    rule_hits = rule_engine(complaint)
-    final_output.extend(rule_hits)
+    # 2) AI model suggestions
+    ai_results = ai_model_suggestions(complaint)
+    final.extend(ai_results)
 
-    # 2️⃣ Then AI Suggestions
-    ai_hits = ai_model_suggestions(complaint, dataset)
-    final_output.extend(ai_hits)
-
-    # Remove duplicates (optional)
-    unique = []
+    # Remove duplicates
     seen = set()
-
-    for item in final_output:
+    unique = []
+    for item in final:
         key = item["Offense"]
         if key not in seen:
             unique.append(item)
             seen.add(key)
 
-    return unique[:5]  # return best 5 results
+    return unique[:5]
