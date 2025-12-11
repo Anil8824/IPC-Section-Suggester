@@ -20,7 +20,7 @@
 **🚨 Helps in early crime categorization for law-related applications**
 
 
-## 🌍 Live Demo (If Deployed)
+## 🌍 Live Demo
 
 **👉 https://ipc-section-suggester-6776.streamlit.app/**
 
